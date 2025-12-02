@@ -1,92 +1,142 @@
+-- ========================================
+-- KatelyaTV Cloudflare D1 数据库初始化脚本
+-- 版本: 2025-09-05 (适配当前代码结构)
+-- ========================================
+
+-- 1. 用户表 (必需)
 CREATE TABLE IF NOT EXISTS users (
-  username TEXT PRIMARY KEY,
-  password TEXT NOT NULL,
-  created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    salt TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_login DATETIME,
+    login_count INTEGER DEFAULT 0,
+    is_active BOOLEAN DEFAULT 1,
+    role TEXT DEFAULT 'user'
 );
 
+-- 2. 用户设置表 (成人内容过滤必需)
+CREATE TABLE IF NOT EXISTS user_settings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    filter_adult_content BOOLEAN DEFAULT 1,
+    can_disable_filter BOOLEAN DEFAULT 1,
+    managed_by_admin BOOLEAN DEFAULT 0,
+    last_filter_change DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+);
+
+-- 3. 播放记录表 (观看历史)
 CREATE TABLE IF NOT EXISTS play_records (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  username TEXT NOT NULL,
-  key TEXT NOT NULL,
-  title TEXT NOT NULL,
-  source_name TEXT NOT NULL,
-  cover TEXT NOT NULL,
-  year TEXT NOT NULL,
-  index_episode INTEGER NOT NULL,
-  total_episodes INTEGER NOT NULL,
-  play_time INTEGER NOT NULL,
-  total_time INTEGER NOT NULL,
-  save_time INTEGER NOT NULL,
-  search_title TEXT,
-  UNIQUE(username, key)
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL,
+    video_id TEXT NOT NULL,
+    video_title TEXT,
+    video_url TEXT,
+    video_cover TEXT,
+    current_time REAL DEFAULT 0,
+    duration REAL DEFAULT 0,
+    progress REAL DEFAULT 0,
+    episode_index INTEGER DEFAULT 0,
+    episode_url TEXT,
+    last_watched DATETIME DEFAULT CURRENT_TIMESTAMP,
+    watch_count INTEGER DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE,
+    UNIQUE(username, video_id)
 );
 
+-- 4. 收藏表
 CREATE TABLE IF NOT EXISTS favorites (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  username TEXT NOT NULL,
-  key TEXT NOT NULL,
-  title TEXT NOT NULL,
-  source_name TEXT NOT NULL,
-  cover TEXT NOT NULL,
-  year TEXT NOT NULL,
-  total_episodes INTEGER NOT NULL,
-  save_time INTEGER NOT NULL,
-  UNIQUE(username, key)
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL,
+    video_id TEXT NOT NULL,
+    video_title TEXT,
+    video_cover TEXT,
+    video_url TEXT,
+    rating REAL,
+    year TEXT,
+    area TEXT,
+    category TEXT,
+    actors TEXT,
+    director TEXT,
+    description TEXT,
+    added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(username, video_id),
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
 
+-- 5. 搜索历史表
 CREATE TABLE IF NOT EXISTS search_history (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  username TEXT NOT NULL,
-  keyword TEXT NOT NULL,
-  created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-  UNIQUE(username, keyword)
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL,
+    keyword TEXT NOT NULL,
+    search_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS admin_config (
-  id INTEGER PRIMARY KEY DEFAULT 1,
-  config TEXT NOT NULL,
-  updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
-);
-
+-- 6. 跳过配置表 (跳过片头片尾)
 CREATE TABLE IF NOT EXISTS skip_configs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  username TEXT NOT NULL,
-  key TEXT NOT NULL,
-  source TEXT NOT NULL,
-  video_id TEXT NOT NULL,
-  title TEXT NOT NULL,
-  segments TEXT NOT NULL,
-  updated_time INTEGER NOT NULL,
-  UNIQUE(username, key)
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL,
+    video_id TEXT NOT NULL,
+    skip_start INTEGER DEFAULT 0,
+    skip_end INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(username, video_id),
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
 
--- 基本索引
+-- ========================================
+-- 索引优化
+-- ========================================
+
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_user_settings_username ON user_settings(username);
 CREATE INDEX IF NOT EXISTS idx_play_records_username ON play_records(username);
+CREATE INDEX IF NOT EXISTS idx_play_records_last_watched ON play_records(last_watched);
 CREATE INDEX IF NOT EXISTS idx_favorites_username ON favorites(username);
 CREATE INDEX IF NOT EXISTS idx_search_history_username ON search_history(username);
 CREATE INDEX IF NOT EXISTS idx_skip_configs_username ON skip_configs(username);
 
--- 复合索引优化查询性能
--- 播放记录：用户名+键值的复合索引，用于快速查找特定记录
-CREATE INDEX IF NOT EXISTS idx_play_records_username_key ON play_records(username, key);
--- 播放记录：用户名+保存时间的复合索引，用于按时间排序的查询
-CREATE INDEX IF NOT EXISTS idx_play_records_username_save_time ON play_records(username, save_time DESC);
+-- ========================================
+-- 触发器
+-- ========================================
 
--- 收藏：用户名+键值的复合索引，用于快速查找特定收藏
-CREATE INDEX IF NOT EXISTS idx_favorites_username_key ON favorites(username, key);
--- 收藏：用户名+保存时间的复合索引，用于按时间排序的查询
-CREATE INDEX IF NOT EXISTS idx_favorites_username_save_time ON favorites(username, save_time DESC);
+-- 自动更新 user_settings 时间戳
+CREATE TRIGGER IF NOT EXISTS update_user_settings_timestamp 
+    AFTER UPDATE ON user_settings
+    FOR EACH ROW
+BEGIN
+    UPDATE user_settings SET updated_at = CURRENT_TIMESTAMP WHERE username = NEW.username;
+END;
 
--- 搜索历史：用户名+关键词的复合索引，用于快速查找/删除特定搜索记录
-CREATE INDEX IF NOT EXISTS idx_search_history_username_keyword ON search_history(username, keyword);
--- 搜索历史：用户名+创建时间的复合索引，用于按时间排序的查询
-CREATE INDEX IF NOT EXISTS idx_search_history_username_created_at ON search_history(username, created_at DESC);
+-- 新用户注册时创建默认设置
+CREATE TRIGGER IF NOT EXISTS create_default_user_settings
+    AFTER INSERT ON users
+    FOR EACH ROW
+BEGIN
+    INSERT OR IGNORE INTO user_settings (username, filter_adult_content, can_disable_filter, managed_by_admin)
+    VALUES (NEW.username, 1, 1, 0);
+END;
 
--- 搜索历史清理查询的优化索引
-CREATE INDEX IF NOT EXISTS idx_search_history_username_id_created_at ON search_history(username, id, created_at DESC);
+-- 更新播放记录时间戳
+CREATE TRIGGER IF NOT EXISTS update_play_records_timestamp 
+    AFTER UPDATE ON play_records
+    FOR EACH ROW
+BEGIN
+    UPDATE play_records SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
 
--- 跳过配置索引
--- 跳过配置：用户名+键值的复合索引，用于快速查找特定配置
-CREATE INDEX IF NOT EXISTS idx_skip_configs_username_key ON skip_configs(username, key);
--- 跳过配置：用户名+更新时间的复合索引，用于按时间排序的查询
-CREATE INDEX IF NOT EXISTS idx_skip_configs_username_updated_time ON skip_configs(username, updated_time DESC);
+-- 更新跳过配置时间戳
+CREATE TRIGGER IF NOT EXISTS update_skip_configs_timestamp 
+    AFTER UPDATE ON skip_configs
+    FOR EACH ROW
+BEGIN
+    UPDATE skip_configs SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
