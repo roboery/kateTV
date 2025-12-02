@@ -7,7 +7,7 @@ pages_build_output_dir = ".vercel/output/static"
 [[d1_databases]]
 binding = "DB"
 database_name = "katetv"
-database_id = "4117e6a9-47af-4b8a-8c43-6d0a371def5f"
+database_id = "1cd71543-2a0a-46ce-abfb-144e77f20625"
 
 # 生产环境配置
 [env.production]
